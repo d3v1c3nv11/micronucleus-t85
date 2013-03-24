@@ -12,9 +12,9 @@
 #define MICRONUCLEUS_VERSION_MAJOR 2
 #define MICRONUCLEUS_VERSION_MINOR 0
 // how many milliseconds should host wait till it sends another erase or write?
-// needs to be above 4.5 (and a whole integer) as avr freezes for 4.5ms
-// in current testing PC application fails if delay is less than 8ms, not sure why
-#define MICRONUCLEUS_WRITE_SLEEP 8
+// needs to be above 9 (and a whole integer) as avr freezes for up to 9ms during runSpmOperation()
+// in HID mode need to wait the USB poll interval plus the erase/write time
+#define MICRONUCLEUS_WRITE_SLEEP (USB_CFG_INTR_POLL_INTERVAL + 9)
 
 
 #include <avr/io.h>
@@ -89,17 +89,36 @@ static void leaveBootloader() __attribute__((__noreturn__));
 static uchar events = 0; // bitmap of events to run
 #define EVENT_EXECUTE 1
 #define EVENT_SPM_OPERATION 2
+#define EVENT_SPM_OPERATION_NODELAY 4
 
 // controls state of events
 #define fireEvent(event) events |= (event)
 #define isEvent(event)   (events & (event))
 #define clearEvents()    events = 0
+#define clearEvent(event)   events &= ~(event)
 
 uint16_t idlePolls = 0; // how long have we been idle?
 
+/* USB report descriptor */
+PROGMEM const char usbHidReportDescriptor[] = {
+  0x06, 0xa0, 0xff, // USAGE_PAGE (Vendor Defined Page 1)
+  0x09, 0x01,       // USAGE (Vendor Usage 1)
+  0xa1, 0x01,       // COLLECTION (Application)
+
+  // Input Report
+  0x09, 0x02,       // Usage ID - vendor defined
+  0x15, 0x00,       // Logical Minimum (0)
+  0x26, 0xFF, 0x00, // Logical Maximum (255)
+  0x75, 0x08,       // Report Size (8 bits)
+  0x95, 0x08,       // Report Count (8 fields)
+  0x81, 0x02,       // Input (Data, Variable, Absolute)
+
+  0xc0              // END_COLLECTION
+};
 
 /* ------------------------------------------------------------------------ */
 static uchar usbFunctionSetup(uchar data[8]);
+static uchar usbFunctionWrite(uchar *data, uchar length);
 static inline void initForUsbConnectivity(void);
 static inline void tiny85FlashInit(void);
 static inline void leaveBootloader(void);
@@ -119,6 +138,7 @@ static inline void leaveBootloader(void);
 
 /* ------------------------------------------------------------------------ */
 static uint16_t spmAddress;
+static uint16_t spmData;
 static uchar spmCommand;
 
 static uchar usbFunctionSetup(uchar data[8]) {
@@ -133,29 +153,41 @@ static uchar usbFunctionSetup(uchar data[8]) {
         POSTSCRIPT_SIZE,
         0
     };
-    
-    if (rq->bRequest == 0) { // get device info
-        usbMsgPtr = (usbMsgPtr_t)replyBuffer;
+
+    if ((rq->bmRequestType & USBRQ_TYPE_MASK) == USBRQ_TYPE_CLASS) {    /* HID class request */
+        if (rq->bRequest == USBRQ_HID_GET_REPORT) {  /* wValue: ReportType (highbyte), ReportID (lowbyte) */
+            /* since we have only one report type, we can ignore the report-ID */
+            // get device info
+            usbMsgPtr = (usbMsgPtr_t)replyBuffer;
         replyBuffer[5] = OSCCAL;
         return sizeof(replyBuffer);
-        
-    } else if (rq->bRequest & SPM_COMMAND_MASK) { // spm operation
-        spmCommand = rq->bRequest & ~(SPM_COMMAND_MASK);
-        spmAddress = rq->wIndex.word;
-        fireEvent(EVENT_SPM_OPERATION);       
+        } else if(rq->bRequest == USBRQ_HID_SET_REPORT) {
+            /* since we have only one report type, we can ignore the report-ID */
+            return USB_NO_MSG;
+        }
+    }        
 
-    } else if (rq->bRequest & LOADPAGE_COMMAND_MASK) {
-        cli();
-        boot_page_fill(rq->bRequest & ~LOADPAGE_COMMAND_MASK, rq->wIndex.word);
-        sei();
-
-    } else { // exit bootloader
-#       if BOOTLOADER_CAN_EXIT
-            fireEvent(EVENT_EXECUTE);
-#       endif
-    }
+// TODO: add support for exit bootloader message
+//#       if BOOTLOADER_CAN_EXIT
+//            fireEvent(EVENT_EXECUTE);
+//#endif
     
     return 0;
+}
+
+// read in a page over usb, and write it in to the flash write buffer
+static uchar usbFunctionWrite(uchar *data, uchar length) {
+    PORTB|=(1<<0);
+        spmCommand = data[0] & ~(SPM_COMMAND_MASK);
+        spmAddress = data[2] + (data[1] * 256);
+        spmData = data[4] + (data[3] * 256);
+        if (data[0] & SPM_COMMAND_MASK)
+            fireEvent(EVENT_SPM_OPERATION);       
+        else
+            fireEvent(EVENT_SPM_OPERATION_NODELAY);
+    PORTB&=~(1<<0);
+
+    return 1;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -185,10 +217,6 @@ static inline void initForUsbConnectivity(void) {
 // this function should be called with interrupts disabled as the boot_page instructions can have
 // no break between loading SPMCSR and executing SPM instruction
 static inline void tiny85FlashInit(void) {
-    // clean up the boot page registers, in case there was a partial page already loaded
-    // this is a good place to do it as it's run during initialization, and after writing/erasing flash
-    __boot_page_fill_clear();
-
     // check for erased first page (no bootloader interrupt vectors), add vectors if missing
     // this needs to happen for usb communication to work later - essential to first run after bootloader
     // being installed
@@ -230,25 +258,27 @@ static inline void leaveBootloader(void) {
     asm volatile ("rjmp __vectors - 4");
 }
 
-
-#define run_spm_operation(address, instruction)  \
+#define run_spm_operation_load(command, address, data)   \
 (__extension__({                                 \
     __asm__ __volatile__                         \
     (                                            \
+        "movw  r0, %3\n\t"                       \
         "sts %0, %1\n\t"                         \
         "spm\n\t"                                \
+        "clr  r1\n\t"                            \
         :                                        \
         : "i" (_SFR_MEM_ADDR(__SPM_REG)),        \
-          "r" ((uint8_t)(instruction)),          \
-          "z" ((uint16_t)(address))              \
+          "r" ((uint8_t)(command)),              \
+          "z" ((uint16_t)(address)),             \
+          "r" ((uint16_t)(data))                 \
+        : "r0"                                   \
     );                                           \
 }))
 
-
-static inline void runSpmOperation(void) {
+static void runSpmOperation(void) {
     // make sure an interrupt can't separate loading the SPMCSR register and executing the SPM instruction
     cli();
-    run_spm_operation(spmAddress, spmCommand);
+    run_spm_operation_load(spmCommand, spmAddress, spmData);
     boot_spm_busy_wait(); // Wait until the memory is written.
     
     // load the interrupt vectors in case they were just erased
@@ -258,6 +288,9 @@ static inline void runSpmOperation(void) {
 
 
 int main(void) {
+DDRB|=(1<<0);
+DDRB|=(1<<1);
+
     /* initialize  */
     #ifdef RESTORE_OSCCAL
         uint8_t osccal_default = OSCCAL;
@@ -267,6 +300,13 @@ int main(void) {
     #endif
     
     wdt_disable();      /* main app may have enabled watchdog */
+    
+
+    // clean up the boot page registers, in case there was a partial page already loaded
+    // is there a better place to put this? tiny85FlashInit() seemed good, but is now called
+    // when there is valid data in the buffer
+    __boot_page_fill_clear();
+
     tiny85FlashInit();
     bootLoaderInit();
     
@@ -286,17 +326,28 @@ int main(void) {
             _delay_us(IDLE_POLL_DELAY_US);
             idlePolls++;
 
-            // runSpmOperation will freeze the chip for ~ 4.5ms, breaking usb protocol, so host
-            // needs to wait > 4.5ms before next usb request
-            if (isEvent(EVENT_SPM_OPERATION)) runSpmOperation();
+            // runSpmOperation will freeze the chip for up to 9ms, breaking usb protocol, so host
+            // needs to wait > 9ms before next usb request
+
+            if(isEvent(EVENT_SPM_OPERATION_NODELAY)) {
+                runSpmOperation();
+                clearEvent(EVENT_SPM_OPERATION_NODELAY);
+            }
+
+            if(usbInterruptIsReady()){
+PORTB|=(1<<1);
+                if (isEvent(EVENT_SPM_OPERATION)) {
+                    runSpmOperation();
+                    clearEvent(EVENT_SPM_OPERATION);
+                }
+                usbSetInterrupt((void*)0x00, 0);
+PORTB&=~(1<<1);
+            }
 #           if BOOTLOADER_CAN_EXIT            
                 if (isEvent(EVENT_EXECUTE)) { // when host requests device run uploaded program
                     break;
                 }
 #           endif
-            
-            clearEvents();
-            
         } while(bootLoaderCondition());  /* main event loop runs so long as bootLoaderCondition remains truthy */
     }
     

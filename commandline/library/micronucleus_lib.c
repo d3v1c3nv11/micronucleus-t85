@@ -1,7 +1,7 @@
 /*
   Created: September 2012
   by ihsan Kehribar <ihsan@kehribar.me>
-
+  
   Permission is hereby granted, free of charge, to any person obtaining a copy of
   this software and associated documentation files (the "Software"), to deal in
   the Software without restriction, including without limitation the rights to
@@ -59,7 +59,22 @@ micronucleus* micronucleus_connect() {
         
         // get nucleus info
         unsigned char buffer[6];
-        int res = usb_control_msg(nucleus->device, 0xC0, 0, 0, 0, buffer, 6, MICRONUCLEUS_USB_TIMEOUT);
+        #if 0
+        int res = usb_control_msg(nucleus->device, 
+                   USB_ENDPOINT_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+                   0, 
+                   0, 0,
+                   buffer, 6,
+                   MICRONUCLEUS_USB_TIMEOUT);
+        #else
+        int res = usb_control_msg(nucleus->device, 
+                   USB_ENDPOINT_IN | USB_TYPE_CLASS | USB_RECIP_DEVICE,
+                   USBRQ_HID_GET_REPORT, 
+                   USB_HID_REPORT_TYPE_FEATURE << 8 | (0 & 0xff), 0,
+                   buffer, 6,
+                   MICRONUCLEUS_USB_TIMEOUT);
+        #endif
+
         assert(res >= 4);
         
         nucleus->flash_size = (buffer[0]<<8) + buffer[1];
@@ -129,7 +144,12 @@ int micronucleus_addVectorsToFlash(micronucleus* deviceHandle, unsigned char* bu
 int micronucleus_eraseFlash(micronucleus* deviceHandle, micronucleus_callback progress) {
   int res;
   if(deviceHandle->version.major < 2) {
-    res = usb_control_msg(deviceHandle->device, 0xC0, 2, 0, 0, NULL, 0, MICRONUCLEUS_USB_TIMEOUT);
+    res = usb_control_msg(deviceHandle->device,
+           USB_ENDPOINT_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+           2,
+           0, 0,
+           NULL, 0,
+           MICRONUCLEUS_USB_TIMEOUT);
     
     // give microcontroller enough time to erase all writable pages and come back online
     float i = 0;
@@ -173,6 +193,7 @@ int micronucleus_eraseFlash(micronucleus* deviceHandle, micronucleus_callback pr
       // that erases the first page of flash before loading the vectors only if the rest of application flash
       // is erased (allowing the program counter to reach the bootloader eventually after running through 
       // pages of 0xFF's)
+#if 0
       res = usb_control_msg(deviceHandle->device,
              USB_ENDPOINT_OUT| USB_TYPE_VENDOR | USB_RECIP_DEVICE,
              MICRONUCLEUS_SPM_COMMAND_MASK | MICRONUCLEUS_SPM_COMMAND_ERASE,
@@ -184,6 +205,23 @@ int micronucleus_eraseFlash(micronucleus* deviceHandle, micronucleus_callback pr
 
       if(res < 0)
         return -1;
+#else
+      unsigned char eraseCommand[5] = {MICRONUCLEUS_SPM_COMMAND_MASK | MICRONUCLEUS_SPM_COMMAND_ERASE,
+                                      (unsigned char)(currentAddress/256), 
+                                      (unsigned char)currentAddress, 
+                                      0, 0};
+      res = usb_control_msg(deviceHandle->device,
+             USB_ENDPOINT_OUT| USB_TYPE_CLASS | USB_RECIP_DEVICE,
+             USBRQ_HID_SET_REPORT,
+             USB_HID_REPORT_TYPE_FEATURE << 8 | (0 & 0xff), 0,
+             eraseCommand, 5,
+             MICRONUCLEUS_USB_TIMEOUT);
+
+      delay(deviceHandle->erase_sleep);
+
+      if(res < 5)
+        return -1;
+#endif
     }
 
     return 0;
@@ -223,18 +261,33 @@ int micronucleus_writeFlash(micronucleus* deviceHandle, unsigned int program_siz
              MICRONUCLEUS_USB_TIMEOUT);
     }
     else {
-      int i;
-      for(i=0; i<page_length; i+=2) {
-        res = usb_control_msg(deviceHandle->device,
+#if 0
+      // ask microcontroller to load this page's data into the write buffer
+      res = usb_control_msg(deviceHandle->device,
              USB_ENDPOINT_OUT| USB_TYPE_VENDOR | USB_RECIP_DEVICE,
-             0x40 | i,
-             0, page_buffer[i] + (page_buffer[i+1] * 256),
-             0, 0,
+             1,
+             page_length, 0,
+             page_buffer, page_length,
              MICRONUCLEUS_USB_TIMEOUT);
 
-        if (res < 0) return -1;
+      if (res != page_length) return -1;
+#else
+      int i;
+      for(i=0; i<page_length; i+=2) {
+        unsigned char loadCommand[5] = {MICRONUCLEUS_SPM_COMMAND_LOAD,
+                                        0, i, 
+                                        page_buffer[i+1], page_buffer[i]};
+
+        res = usb_control_msg(deviceHandle->device,
+               USB_ENDPOINT_OUT| USB_TYPE_CLASS | USB_RECIP_DEVICE,
+               USBRQ_HID_SET_REPORT,
+               USB_HID_REPORT_TYPE_FEATURE << 8 | (0 & 0xff), 0,
+               loadCommand, 5,
+               MICRONUCLEUS_USB_TIMEOUT);
       }
 
+#endif
+#if 0
       // ask microcontroller to write the data to flash
       res = usb_control_msg(deviceHandle->device,
              USB_ENDPOINT_OUT| USB_TYPE_VENDOR | USB_RECIP_DEVICE,
@@ -242,6 +295,20 @@ int micronucleus_writeFlash(micronucleus* deviceHandle, unsigned int program_siz
              0, address,
              0, 0,
              MICRONUCLEUS_USB_TIMEOUT);
+#else
+      unsigned char writeCommand[5] = {MICRONUCLEUS_SPM_COMMAND_MASK | MICRONUCLEUS_SPM_COMMAND_WRITE,
+                                      (unsigned char)(address/256), (unsigned char)address, 
+                                      0, 0};
+
+      res = usb_control_msg(deviceHandle->device,
+             USB_ENDPOINT_OUT| USB_TYPE_CLASS | USB_RECIP_DEVICE,
+             USBRQ_HID_SET_REPORT,
+             USB_HID_REPORT_TYPE_FEATURE << 8 | (0 & 0xff), 0,
+             writeCommand, 5,
+             MICRONUCLEUS_USB_TIMEOUT);
+
+#endif
+
     }
 
     // call progress update callback if that's a thing
@@ -265,7 +332,12 @@ int micronucleus_writeFlash(micronucleus* deviceHandle, unsigned int program_siz
 
 int micronucleus_startApp(micronucleus* deviceHandle) {
   int res;
-  res = usb_control_msg(deviceHandle->device, 0xC0, 4, 0, 0, NULL, 0, MICRONUCLEUS_USB_TIMEOUT);
+  res = usb_control_msg(deviceHandle->device,
+         USB_ENDPOINT_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+         4, 
+         0, 0, 
+         NULL, 0, 
+         MICRONUCLEUS_USB_TIMEOUT);
   
   if(res!=0)  
     return -1;
