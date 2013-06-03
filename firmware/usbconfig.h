@@ -131,6 +131,8 @@
  * connected to D- instead of D+.
  */
 
+//#define OSCCAL_PWM_DEBUG
+
 #ifdef __ASSEMBLER__
 macro measureSof
     in  YL, USISR

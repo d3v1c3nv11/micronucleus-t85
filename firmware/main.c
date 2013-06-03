@@ -15,8 +15,6 @@
 // needs to be above 4.5 (and a whole integer) as avr freezes for 4.5ms
 #define MICRONUCLEUS_WRITE_SLEEP 8
 
-//#define OSCCAL_PWM_DEBUG
-
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -390,7 +388,7 @@ static inline void leaveBootloader(void) {
     asm volatile ("rjmp __vectors - 4");
 }
 
-#define OSCCAL_MAX  192
+#define OSCCAL_MAX  0x7F    // keep bit 7 clear to keep oscillator in lower frequency range
 #define OSCCAL_MIN  0
 
 #define TIMER0_PRESCALING           8
@@ -404,21 +402,28 @@ static void tuneOscillator(void) {
     uchar tickOverflows = GPIOR1;
     uchar tickRemainder = GPIOR0;
 
+    // only look at the tuning bits, not the low/high range select
+    uchar osccal7bit = OSCCAL & 0x7F;
+
     // only adjust OSCCAL if a new SOF was measured, and it is sane
-    if(tickOverflows > 0 && tickOverflows < 20) {
+    if(tickOverflows > 0) {
          char t = tickRemainder-EXPECTED_TIMER0_INCREMENT;
 
-         if(tickOverflows < 7) {
-            if(OSCCAL < OSCCAL_MAX)
+         if(USISR & (1 << USIOIF)) {
+            // don't use the measurement if the counter overflowed, just clear the overflow flag
+            USISR |= (1 << USIOIF);
+         }
+         else if(tickOverflows < 7) {
+            if(osccal7bit < OSCCAL_MAX)
                 OSCCAL++;
          }
          else if(tickOverflows > 7) {
-            if(OSCCAL > OSCCAL_MIN)
+            if(osccal7bit > OSCCAL_MIN)
                 OSCCAL--;
          }
          else {
-            if (t<-TOLERATED_DEVIATION && OSCCAL < OSCCAL_MAX) OSCCAL++;
-            if (t> TOLERATED_DEVIATION && OSCCAL > OSCCAL_MIN) OSCCAL--;
+            if (t<-TOLERATED_DEVIATION && osccal7bit < OSCCAL_MAX) OSCCAL++;
+            if (t> TOLERATED_DEVIATION && osccal7bit > OSCCAL_MIN) OSCCAL--;
          }
 
 #ifdef OSCCAL_PWM_DEBUG
@@ -433,7 +438,7 @@ static void tuneOscillator(void) {
 
 
 int main(void) {
-#ifdef PWM_DEBUG
+#ifdef OSCCAL_PWM_DEBUG
     DDRB |= (1 << PB0) | (1 << PB1) | (1 << PB2);
 #endif
     /* initialize  */
