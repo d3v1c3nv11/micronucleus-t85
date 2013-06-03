@@ -12,7 +12,7 @@
 #     make fuse    			# to set the clock generator, boot section size etc.
 #     make flash   			# to load the boot loader into flash
 #     make lock    			# to protect the boot loader from overwriting
-#     make disablereset		# for ATtiny85 target - to use external reset line for IO (CAUTION: this is not easy to enable again, see README) 
+#     make disablereset		# for ATtiny85 target - to use external reset line for IO (CAUTION: this is not easy to enable again, see README)
 
 F_CPU = 16500000
 DEVICE = attiny85
@@ -24,7 +24,7 @@ LOCKOPT = -U lock:w:0x2f:m
 # - for the size of your device (8kb = 1024 * 8 = 8192) subtract above value 2124... = 6068
 # - How many pages in is that? 6068 / 64 (tiny85 page size in bytes) = 94.8125
 # - round that down to 94 - our new bootloader address is 94 * 64 = 6016, in hex = 1780
-BOOTLOADER_ADDRESS = 1780
+BOOTLOADER_ADDRESS = 1800
 
 PROGRAMMER = -c USBasp
 # PROGRAMMER contains AVRDUDE options to address your programmer
@@ -113,7 +113,7 @@ FUSEOPT_t85_DISABLERESET = -U lfuse:w:0xe1:m -U efuse:w:0xfe:m -U hfuse:w:0x5d:m
 #
 # Fuse high byte:
 # 0xdd = 1 1 0 1   1 1 0 1
-#        ^ ^ ^ ^   ^ \-+-/ 
+#        ^ ^ ^ ^   ^ \-+-/
 #        | | | |   |   +------ BODLEVEL 2..0 (brownout trigger level -> 2.7V)
 #        | | | |   +---------- EESAVE (preserve EEPROM on Chip Erase -> not preserved)
 #        | | | +-------------- WDTON (watchdog timer always on -> disable)
@@ -123,7 +123,7 @@ FUSEOPT_t85_DISABLERESET = -U lfuse:w:0xe1:m -U efuse:w:0xfe:m -U hfuse:w:0x5d:m
 #
 # Fuse high byte ("no reset": external reset disabled, can't program through SPI anymore)
 # 0x5d = 0 1 0 1   1 1 0 1
-#        ^ ^ ^ ^   ^ \-+-/ 
+#        ^ ^ ^ ^   ^ \-+-/
 #        | | | |   |   +------ BODLEVEL 2..0 (brownout trigger level -> 2.7V)
 #        | | | |   +---------- EESAVE (preserve EEPROM on Chip Erase -> not preserved)
 #        | | | +-------------- WDTON (watchdog timer always on -> disable)
@@ -152,7 +152,7 @@ CFLAGS = -Wall -Os -fno-move-loop-invariants -fno-tree-scev-cprop -fno-inline-sm
 LDFLAGS = -Wl,--relax,--gc-sections -Wl,--section-start=.text=$(BOOTLOADER_ADDRESS),-Map=main.map
 
 OBJECTS =  usbdrv/usbdrvasm.o usbdrv/oddebug.o main.o
-OBJECTS += libs-device/osccal.o
+#OBJECTS += libs-device/osccal.o
 
 # symbolic targets:
 all: main.hex
@@ -178,7 +178,7 @@ readflash:
 
 fuse:
 	$(AVRDUDE) $(FUSEOPT)
-	
+
 disablereset:
 	$(AVRDUDE) $(FUSEOPT_t85_DISABLERESET)
 

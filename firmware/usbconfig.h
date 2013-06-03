@@ -130,6 +130,40 @@
  * counts SOF packets. This feature requires that the hardware interrupt is
  * connected to D- instead of D+.
  */
+
+#ifdef __ASSEMBLER__
+macro measureSof
+    in  YL, USISR
+    andi YL, 15     ; mask to remove flags and leave USI Counter
+
+    ; only run this once per SOF, by detecting zero USI counter
+    breq endsofhook
+
+    ; store USISR to GPIOR1
+    out GPIOR1, YL
+
+    ; store TCNT0 to GPIOR0
+    in  YL, TCNT0
+    out GPIOR0, YL
+
+    ; clear both registers (TCNT0 before USI to avoid accidental USI overflow)
+    clr YL
+    out TCNT0, YL
+    out USISR, YL
+
+#ifdef OSCCAL_PWM_DEBUG
+    ; toggle pin for debugging
+    ldi YL, 4
+    out PINB, YL
+#endif
+
+endsofhook:
+    endm
+
+#endif
+#define USB_SOF_HOOK                    measureSof
+
+
 /* #ifdef __ASSEMBLER__
  * macro myAssemblerMacro
  *     in      YL, TCNT0
@@ -157,12 +191,7 @@
  * usbFunctionWrite(). Use the global usbCurrentDataToken and a static variable
  * for each control- and out-endpoint to check for duplicate packets.
  */
-//#if USB_CFG_CLOCK_KHZ==16500
-#define USB_CFG_HAVE_MEASURE_FRAME_LENGTH   1
-#include "osccal.h"
-//#else
-//#define USB_CFG_HAVE_MEASURE_FRAME_LENGTH   0
-//#endif
+#define USB_CFG_HAVE_MEASURE_FRAME_LENGTH   0
 /* define this macro to 1 if you want the function usbMeasureFrameLength()
  * compiled in. This function can be used to calibrate the AVR's RC oscillator.
  */

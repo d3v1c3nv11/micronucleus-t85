@@ -66,7 +66,7 @@ these macros are defined, the boot loader uses them.
  * to interrupt pin INT0!
  */
 #endif
- 
+
 #if (defined __AVR_ATtiny85__) && (HARDWARE_CONFIG == TINY85_HARDWARE_CONFIG_1)
 # define USB_CFG_DMINUS_BIT      0
 /* This is the bit number in USB_CFG_IOPORT where the USB D- line is connected.
@@ -77,7 +77,7 @@ these macros are defined, the boot loader uses them.
  * This may be any bit in the port, but must be configured as a pin change interrupt.
  */
  #endif
- 
+
 #if (defined __AVR_ATtiny85__) && (HARDWARE_CONFIG == TINY85_HARDWARE_CONFIG_2)
 # define USB_CFG_DMINUS_BIT      3
 /* This is the bit number in USB_CFG_IOPORT where the USB D- line is connected.
@@ -195,9 +195,9 @@ these macros are defined, the boot loader uses them.
 //#    define BOOTLOADER_CAN_EXIT 1
 //#endif
 
-// setup interrupt for Pin Change for D+
+// setup interrupt for Pin Change for D- (minus used for tuneosccal)
 #define USB_INTR_CFG            PCMSK
-#define USB_INTR_CFG_SET        (1 << USB_CFG_DPLUS_BIT)
+#define USB_INTR_CFG_SET        (1 << USB_CFG_DMINUS_BIT)
 #define USB_INTR_CFG_CLR        0
 #define USB_INTR_ENABLE         GIMSK
 #define USB_INTR_ENABLE_BIT     PCIE
@@ -222,7 +222,7 @@ these macros are defined, the boot loader uses them.
   #define digitalRead(pin) (PINB & _BV(pin))
   #define bootLoaderStartCondition() (!digitalRead(START_JUMPER_PIN))
   #define bootLoaderCondition() 1
-  
+
   #ifndef __ASSEMBLER__   /* assembler cannot parse function definitions */
     static inline void  bootLoaderInit(void) {
       // DeuxVis pin-5 pullup
