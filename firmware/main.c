@@ -392,12 +392,14 @@ static inline void leaveBootloader(void) {
 #define OSCCAL_MIN  0
 
 #define TIMER0_PRESCALING           8
-#define TOLERATED_DEVIATION_PPT     5  /* max clock deviation before we tune in 1/10 % */
+#define TOLERATED_DEVIATION_PPT     2  /* max clock deviation before we tune in 1/10 % */
 /* derived constants: */
-#define EXPECTED_TIMER0_INCREMENT   ((F_CPU / (1000 * TIMER0_PRESCALING)) & 0xff)
+#define EXPECTED_TIMER_TICKS        (F_CPU / (1000 * TIMER0_PRESCALING))
+#define EXPECTED_TIMER0_REMAINDER   (EXPECTED_TIMER_TICKS & 0xff)
+#define EXPECTED_TIMER0_OVERFLOWS   (EXPECTED_TIMER_TICKS / 256)
 #define TOLERATED_DEVIATION         (TOLERATED_DEVIATION_PPT * F_CPU / (1000000 * TIMER0_PRESCALING))
 
-
+// using a combination of code from V-USB's osctune.h and the FunkUsb project
 static void tuneOscillator(void) {
     uchar tickOverflows = GPIOR1;
     uchar tickRemainder = GPIOR0;
@@ -407,23 +409,18 @@ static void tuneOscillator(void) {
 
     // only adjust OSCCAL if a new SOF was measured, and it is sane
     if(tickOverflows > 0) {
-         char t = tickRemainder-EXPECTED_TIMER0_INCREMENT;
-
-         if(USISR & (1 << USIOIF)) {
+         if (USISR & (1 << USIOIF)) {
             // don't use the measurement if the counter overflowed, just clear the overflow flag
             USISR |= (1 << USIOIF);
-         }
-         else if(tickOverflows < 7) {
-            if(osccal7bit < OSCCAL_MAX)
+         } else if (tickOverflows < EXPECTED_TIMER0_OVERFLOWS) {
+            if (osccal7bit < OSCCAL_MAX)
                 OSCCAL++;
-         }
-         else if(tickOverflows > 7) {
-            if(osccal7bit > OSCCAL_MIN)
+         } else if (tickOverflows > EXPECTED_TIMER0_OVERFLOWS) {
+            if (osccal7bit > OSCCAL_MIN)
                 OSCCAL--;
-         }
-         else {
-            if (t<-TOLERATED_DEVIATION && osccal7bit < OSCCAL_MAX) OSCCAL++;
-            if (t> TOLERATED_DEVIATION && osccal7bit > OSCCAL_MIN) OSCCAL--;
+         } else {
+            if ((tickRemainder < EXPECTED_TIMER0_REMAINDER - TOLERATED_DEVIATION) && (osccal7bit < OSCCAL_MAX)) OSCCAL++;
+            if ((tickRemainder > EXPECTED_TIMER0_REMAINDER + TOLERATED_DEVIATION) && (osccal7bit > OSCCAL_MIN)) OSCCAL--;
          }
 
 #ifdef OSCCAL_PWM_DEBUG
@@ -441,6 +438,7 @@ int main(void) {
 #ifdef OSCCAL_PWM_DEBUG
     DDRB |= (1 << PB0) | (1 << PB1) | (1 << PB2);
 #endif
+
     /* initialize  */
     #ifdef RESTORE_OSCCAL
         uint8_t osccal_default = OSCCAL;
