@@ -4,7 +4,7 @@
 /*
   Created: September 2012
   by ihsan Kehribar <ihsan@kehribar.me>
-  
+
   Permission is hereby granted, free of charge, to any person obtaining a copy of
   this software and associated documentation files (the "Software"), to deal in
   the Software without restriction, including without limitation the rights to
@@ -21,7 +21,7 @@
   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-  SOFTWARE.  
+  SOFTWARE.
 */
 
 /********************************************************************************
@@ -45,6 +45,24 @@
 #define MICRONUCLEUS_PRODUCT_ID  0x0753
 #define MICRONUCLEUS_USB_TIMEOUT 0xFFFF
 #define MICRONUCLEUS_MAX_MAJOR_VERSION 1
+/*******************************************************************************/
+
+/********************************************************************************
+* HID Communication details
+********************************************************************************/
+#define USBRQ_HID_GET_REPORT    0x01
+#define USBRQ_HID_SET_REPORT    0x09
+
+#define USB_HID_REPORT_TYPE_FEATURE 3
+/*******************************************************************************/
+
+/********************************************************************************
+* Micronucleus Commands
+********************************************************************************/
+#define MICRONUCLEUS_COMMAND_GETINFO    0
+#define MICRONUCLEUS_COMMAND_PAGELOAD   1
+#define MICRONUCLEUS_COMMAND_ERASE      2
+#define MICRONUCLEUS_COMMAND_STARTAPP   3
 /*******************************************************************************/
 
 /********************************************************************************
