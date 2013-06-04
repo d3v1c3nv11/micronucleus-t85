@@ -146,14 +146,31 @@ int micronucleus_writeFlash(micronucleus* deviceHandle, unsigned int program_siz
       } else {
         page_buffer[page_address] = program[address + page_address]; // load from user program
       }
+
+      // every two bytes loaded into the page_buffer, send a word to be loaded into the AVR
+      if (page_address % 2) {
+        unsigned char tempbuf[4] = {(address + page_address - 1) % 256, (address + page_address - 1) / 256,
+                                    page_buffer[page_address-1], page_buffer[page_address]};
+
+        res = usb_control_msg(deviceHandle->device,
+               USB_ENDPOINT_OUT| USB_TYPE_CLASS | USB_RECIP_DEVICE,
+               USBRQ_HID_SET_REPORT,
+               USB_HID_REPORT_TYPE_FEATURE << 8 | (MICRONUCLEUS_COMMAND_PAGELOAD & 0xff),
+               0,
+               tempbuf, sizeof(tempbuf),
+               MICRONUCLEUS_USB_TIMEOUT);
+      }
     }
 
+    unsigned char tempbuf[4] = {address % 256, address / 256, 0, 0};
+
+    // write the pre-loaded page into flash
     res = usb_control_msg(deviceHandle->device,
            USB_ENDPOINT_OUT| USB_TYPE_CLASS | USB_RECIP_DEVICE,
            USBRQ_HID_SET_REPORT,
-           USB_HID_REPORT_TYPE_FEATURE << 8 | (MICRONUCLEUS_COMMAND_PAGELOAD & 0xff),
+           USB_HID_REPORT_TYPE_FEATURE << 8 | (MICRONUCLEUS_COMMAND_PAGEWRITE & 0xff),
            0,
-           page_buffer, page_length,
+           tempbuf, sizeof(tempbuf),
            MICRONUCLEUS_USB_TIMEOUT);
 
 
@@ -163,7 +180,7 @@ int micronucleus_writeFlash(micronucleus* deviceHandle, unsigned int program_siz
     // give microcontroller enough time to write this page and come back online
     delay(deviceHandle->write_sleep);
 
-    if (res != 64) return -1;
+    if (res != sizeof(tempbuf)) return -1;
   }
 
   // call progress update callback with completion status

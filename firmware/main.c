@@ -133,7 +133,7 @@ static addr_t currentAddress; // current progmem address, used for erasing and w
 /* ------------------------------------------------------------------------ */
 static inline void eraseApplicationPage(void);
 static void writeFlashPage(void);
-static void writeWordToPageBuffer(uint16_t data);
+static void writeWordToPageBuffer(addr_t address, uint16_t data);
 static void fillFlashWithVectors(void);
 static uchar usbFunctionSetup(uchar data[8]);
 static uchar usbFunctionWrite(uchar *data, uchar length);
@@ -142,6 +142,19 @@ static inline void tiny85FlashInit(void);
 static inline void tiny85FlashWrites(void);
 //static inline void tiny85FinishWriting(void);
 static inline void leaveBootloader(void);
+
+// resets micro if anything but 0xFF's were found after page 0 in the application
+static inline void eraseSafetyCheck(void) {
+    addr_t tempaddr;
+
+    for (tempaddr = SPM_PAGESIZE; tempaddr < BOOTLOADER_ADDRESS; tempaddr++) {
+        if( pgm_read_byte(tempaddr) != 0xFF) {
+            cli();
+            wdt_enable(WDTO_15MS);
+            while(1);
+        }
+    }
+}
 
 // erase any existing application and write in jumps for usb interrupt and reset to bootloader
 //  - Because flash can be erased once and programmed several times, we can write the bootloader
@@ -167,6 +180,8 @@ static inline void eraseApplicationPage(void) {
         currentAddress = 0;
 
         clearEvents();
+
+        //eraseSafetyCheck();
     }
     sei();
 }
@@ -195,22 +210,22 @@ static void writeFlashPage(void) {
 }))
 
 // write a word in to the page buffer, doing interrupt table modifications where they're required
-static void writeWordToPageBuffer(uint16_t data) {
+static void writeWordToPageBuffer(addr_t address, uint16_t data) {
     uint8_t previous_sreg;
 
     // first two interrupt vectors get replaced with a jump to the bootloader's vector table
-    if (currentAddress == (RESET_VECTOR_OFFSET * 2) || currentAddress == (USBPLUS_VECTOR_OFFSET * 2)) {
+    if (address == (RESET_VECTOR_OFFSET * 2) || address == (USBPLUS_VECTOR_OFFSET * 2)) {
         data = 0xC000 + (BOOTLOADER_ADDRESS/2) - 1;
     }
 
     // at end of page just before bootloader, write in tinyVector table
     // see http://embedded-creations.com/projects/attiny85-usb-bootloader-overview/avr-jtag-programmer/
     // for info on how the tiny vector table works
-    if (currentAddress == BOOTLOADER_ADDRESS - TINYVECTOR_RESET_OFFSET) {
+    if (address == BOOTLOADER_ADDRESS - TINYVECTOR_RESET_OFFSET) {
         data = vectorTemp[0] + ((FLASHEND + 1) - BOOTLOADER_ADDRESS)/2 + 2 + RESET_VECTOR_OFFSET;
-    } else if (currentAddress == BOOTLOADER_ADDRESS - TINYVECTOR_USBPLUS_OFFSET) {
+    } else if (address == BOOTLOADER_ADDRESS - TINYVECTOR_USBPLUS_OFFSET) {
         data = vectorTemp[1] + ((FLASHEND + 1) - BOOTLOADER_ADDRESS)/2 + 1 + USBPLUS_VECTOR_OFFSET;
-    } else if (currentAddress == BOOTLOADER_ADDRESS - TINYVECTOR_OSCCAL_OFFSET) {
+    } else if (address == BOOTLOADER_ADDRESS - TINYVECTOR_OSCCAL_OFFSET) {
         data = OSCCAL;
     }
 
@@ -218,11 +233,11 @@ static void writeWordToPageBuffer(uint16_t data) {
     // clear page buffer as a precaution before filling the buffer on the first page
     // in case the bootloader somehow ran after user program and there was something
     // in the page buffer already
-    if (currentAddress == 0x0000) __boot_page_fill_clear();
+    if (address == 0x0000) __boot_page_fill_clear();
 
     previous_sreg = SREG; // backup previous interrupt settings
     cli(); // ensure interrupts are disabled
-    boot_page_fill(currentAddress, data);
+    boot_page_fill(address, data);
     SREG = previous_sreg; // restore previous interrupt setting
 
     // only need to erase if there is data already in the page that doesn't match what we're programming
@@ -247,7 +262,7 @@ static void fillFlashWithVectors(void) {
 
     // TODO: Or more simply:
     do {
-        writeWordToPageBuffer(0xFFFF);
+        writeWordToPageBuffer(currentAddress, 0xFFFF);
     } while (currentAddress % SPM_PAGESIZE);
 
     writeFlashPage();
@@ -255,11 +270,13 @@ static void fillFlashWithVectors(void) {
 
 /* ------------------------------------------------------------------------ */
 
+uchar currentCommand;
 
 #define MICRONUCLEUS_COMMAND_GETINFO    0
 #define MICRONUCLEUS_COMMAND_PAGELOAD   1
 #define MICRONUCLEUS_COMMAND_ERASE      2
 #define MICRONUCLEUS_COMMAND_STARTAPP   3
+#define MICRONUCLEUS_COMMAND_PAGEWRITE  4
 
 static uchar usbFunctionSetup(uchar data[8]) {
     usbRequest_t *rq = (void *)data;
@@ -272,7 +289,7 @@ static uchar usbFunctionSetup(uchar data[8]) {
         MICRONUCLEUS_WRITE_SLEEP
     };
 
-    uchar currentCommand = (uchar)rq->wValue.bytes[0];
+    currentCommand = (uchar)rq->wValue.bytes[0];
 
     if ((rq->bmRequestType & USBRQ_TYPE_MASK) == USBRQ_TYPE_CLASS) {    /* HID class request */
         if (rq->bRequest == USBRQ_HID_GET_REPORT) {  /* wValue: ReportType (highbyte), ReportID (lowbyte) */
@@ -282,7 +299,8 @@ static uchar usbFunctionSetup(uchar data[8]) {
             return sizeof(replyBuffer);
         } else if(rq->bRequest == USBRQ_HID_SET_REPORT) {
             // react based on the command
-            if (currentCommand == MICRONUCLEUS_COMMAND_PAGELOAD) {
+            if (currentCommand == MICRONUCLEUS_COMMAND_PAGELOAD ||
+                currentCommand == MICRONUCLEUS_COMMAND_PAGEWRITE) {
                 // depend on prior erase to set currentAddress to 0, and
                 //   currentAddress is incremented automatically during page loads
                 // or,
@@ -297,13 +315,12 @@ static uchar usbFunctionSetup(uchar data[8]) {
                 currentAddress = BOOTLOADER_ADDRESS;
                 return 0;
             }
-            else {
-#               if BOOTLOADER_CAN_EXIT
-                    fireEvent(EVENT_EXECUTE);
-#               endif
 
-                return 0;
-            }
+#           if BOOTLOADER_CAN_EXIT
+                fireEvent(EVENT_EXECUTE);
+#           endif
+
+            return 0;
         }
     }
 
@@ -316,34 +333,38 @@ static uchar usbFunctionWrite(uchar *data, uchar length) {
     //if (length > writeLength) length = writeLength; // test for missing final page bug
     //writeLength -= length;
 
-    do {
-        // remember vectors or the tinyvector table
-        if (currentAddress == RESET_VECTOR_OFFSET * 2) {
-            vectorTemp[0] = *(short *)data;
+    // byte 0 is address0
+    // byte 1 is address1
+    // byte 2 is data0 for load
+    // byte 3 is data1 for load
+
+    // if(data[0] == MICRONUCLEUS_COMMAND_PAGELOAD)
+    unsigned short address = *(unsigned short *)(data);
+    unsigned short progdata = *(unsigned short *)(data + 2);
+
+    if (currentCommand == MICRONUCLEUS_COMMAND_PAGELOAD) {
+        if (address == RESET_VECTOR_OFFSET * 2) {
+            vectorTemp[0] = progdata;
         }
 
         if (currentAddress == USBPLUS_VECTOR_OFFSET * 2) {
-            vectorTemp[1] = *(short *)data;
+            vectorTemp[1] = progdata;
         }
 
         // make sure we don't write over the bootloader!
         if (currentAddress >= BOOTLOADER_ADDRESS) {
             //__boot_page_fill_clear();
-            break;
+            return 1;
         }
 
-        writeWordToPageBuffer(*(uint16_t *) data);
-        data += 2; // advance data pointer
-        length -= 2;
-    } while(length);
+        writeWordToPageBuffer(address, progdata);
+    }
+    if (currentCommand == MICRONUCLEUS_COMMAND_PAGEWRITE) {
+        currentAddress = address + SPM_PAGESIZE;
+        fireEvent(EVENT_WRITE_PAGE);
+    }
 
-    // if we have now reached another page boundary, we're done
-    //uchar isLast = (writeLength == 0);
-    uchar isLast = ((currentAddress % SPM_PAGESIZE) == 0);
-    // definitely need this if! seems usbFunctionWrite gets called again in future usbPoll's in the runloop!
-    if (isLast) fireEvent(EVENT_WRITE_PAGE); // ask runloop to write our page
-
-    return isLast; // let vusb know we're done with this request
+    return 1;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -387,12 +408,7 @@ static inline void tiny85FlashWrites(void) {
     _delay_us(2000); // TODO: why is this here? - it just adds pointless two level deep loops seems like?
     // write page to flash, interrupts will be disabled for > 4.5ms including erase
 
-    // TODO: Do we need this? Wouldn't the programmer always send full sized pages?
-    if (currentAddress % SPM_PAGESIZE) { // when we aren't perfectly aligned to a flash page boundary
-        fillFlashWithVectors(); // fill up the rest of the page with 0xFFFF (unprogrammed) bits
-    } else {
-        writeFlashPage(); // otherwise just write it
-    }
+    writeFlashPage();
 }
 
 // finishes up writing to the flash, including adding the tinyVector tables at the end of memory

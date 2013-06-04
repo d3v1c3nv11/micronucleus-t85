@@ -63,6 +63,7 @@
 #define MICRONUCLEUS_COMMAND_PAGELOAD   1
 #define MICRONUCLEUS_COMMAND_ERASE      2
 #define MICRONUCLEUS_COMMAND_STARTAPP   3
+#define MICRONUCLEUS_COMMAND_PAGEWRITE  4
 /*******************************************************************************/
 
 /********************************************************************************
