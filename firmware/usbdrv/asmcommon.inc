@@ -138,7 +138,7 @@ handleIn:
 #if USB_CFG_HAVE_INTRIN_ENDPOINT
     andi    x3, 0xf             ;[35] x3 contains endpoint
 #if USB_CFG_SUPPRESS_INTR_CODE
-    brne    sendNakAndReti      ;[36]
+    brne    setUsbPollFlag      ;[36]
 #else
     brne    handleIn1           ;[36]
 #endif
@@ -150,6 +150,11 @@ handleIn:
     ldi     YL, lo8(usbTxBuf)   ;[43]
     ldi     YH, hi8(usbTxBuf)   ;[44]
     rjmp    usbSendAndReti      ;[45] 57 + 12 = 59 until SOP
+
+setUsbPollFlag:
+    sts     usbHidPollFlag, x1        ;[ ] x1 == USBPID_NAK from above
+    rjmp    sendNakAndReti
+
 
 ; Comment about when to set usbTxLen to USBPID_NAK:
 ; We should set it back when we receive the ACK from the host. This would
