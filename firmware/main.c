@@ -127,14 +127,13 @@ uchar usbHidPollFlag = 0;
 
 
 static uint16_t vectorTemp[2]; // remember data to create tinyVector table before BOOTLOADER_ADDRESS
-static addr_t currentAddress; // current progmem address, used for erasing and writing
 
 
 /* ------------------------------------------------------------------------ */
 static inline void eraseApplicationPage(void);
 static void writeFlashPage(void);
 static void writeWordToPageBuffer(addr_t address, uint16_t data);
-static void fillFlashWithVectors(void);
+static void fillFirstPageWithVectors(void);
 static uchar usbFunctionSetup(uchar data[8]);
 static uchar usbFunctionWrite(uchar *data, uchar length);
 static inline void initForUsbConnectivity(void);
@@ -168,23 +167,15 @@ static inline void eraseApplicationPage(void) {
     // to minimise the chance of leaving the device in a state where the bootloader wont run, if there's power failure
     // during upload
     cli();
-    if (currentAddress) {
-        currentAddress -= SPM_PAGESIZE;
+    if(!currentAddress)
+        eraseSafetyCheck();
 
-        if(!currentAddress)
-            eraseSafetyCheck();
+    boot_page_erase(currentAddress);
+    boot_spm_busy_wait();
 
-        boot_page_erase(currentAddress);
-        boot_spm_busy_wait();
-    }
+    if(!currentAddress)
+        fillFirstPageWithVectors();
 
-    if(!currentAddress) {
-        fillFlashWithVectors();
-
-        // fillFlashWithVectors adds to currentAddress, so set it back to zero
-        currentAddress = 0;
-
-    }
     sei();
 }
 
@@ -193,7 +184,7 @@ static void writeFlashPage(void) {
     uint8_t previous_sreg = SREG; // backup current interrupt setting
     didWriteSomething = 1;
     cli();
-    boot_page_write(currentAddress - 2);
+    boot_page_write(currentAddress);
     boot_spm_busy_wait(); // Wait until the memory is written.
     SREG = previous_sreg; // restore interrupts to previous state
 }
@@ -216,7 +207,12 @@ static void writeWordToPageBuffer(addr_t address, uint16_t data) {
     uint8_t previous_sreg;
 
     // first two interrupt vectors get replaced with a jump to the bootloader's vector table
-    if (address == (RESET_VECTOR_OFFSET * 2) || address == (USBPLUS_VECTOR_OFFSET * 2)) {
+    if (address == (RESET_VECTOR_OFFSET * 2)) {
+        vectorTemp[0] = data;
+        data = 0xC000 + (BOOTLOADER_ADDRESS/2) - 1;
+    }
+    if (address == (USBPLUS_VECTOR_OFFSET * 2)) {
+        vectorTemp[1] = data;
         data = 0xC000 + (BOOTLOADER_ADDRESS/2) - 1;
     }
 
@@ -248,13 +244,9 @@ static void writeWordToPageBuffer(addr_t address, uint16_t data) {
     //if ((pgm_read_word(currentAddress) & data) != data) {
     //    fireEvent(EVENT_PAGE_NEEDS_ERASE);
     //}
-
-    // increment progmem address by one word
-    currentAddress += 2;
 }
 
-// fills the rest of this page with vectors - interrupt vector or tinyvector tables where needed
-static void fillFlashWithVectors(void) {
+static void fillFirstPageWithVectors(void) {
     //int16_t i;
     //
     // fill all or remainder of page with 0xFFFF (as if unprogrammed)
@@ -262,10 +254,14 @@ static void fillFlashWithVectors(void) {
     //    writeWordToPageBuffer(0xFFFF); // is where vector tables are sorted out
     //}
 
+    currentAddress = 0x0000;
+
     // TODO: Or more simply:
+    uchar i=0;
     do {
-        writeWordToPageBuffer(currentAddress, 0xFFFF);
-    } while (currentAddress % SPM_PAGESIZE);
+        writeWordToPageBuffer(i, 0xFFFF);
+        i+=2;
+    } while (i < SPM_PAGESIZE);
 
     writeFlashPage();
 }
@@ -273,6 +269,7 @@ static void fillFlashWithVectors(void) {
 /* ------------------------------------------------------------------------ */
 
 uchar currentCommand;
+static addr_t currentAddress; // current progmem address, used for erasing and writing
 
 #define MICRONUCLEUS_COMMAND_GETINFO    0
 #define MICRONUCLEUS_COMMAND_PAGELOAD   1
@@ -337,32 +334,22 @@ static uchar usbFunctionWrite(uchar *data, uchar length) {
     // byte 3 is data1 for load
 
     // if(data[0] == MICRONUCLEUS_COMMAND_PAGELOAD)
-    unsigned short address = *(unsigned short *)(data);
+    currentAddress = *(unsigned short *)(data);
     unsigned short progdata = *(unsigned short *)(data + 2);
 
     if (currentCommand == MICRONUCLEUS_COMMAND_PAGELOAD) {
-        if (address == RESET_VECTOR_OFFSET * 2) {
-            vectorTemp[0] = progdata;
-        }
-
-        if (currentAddress == USBPLUS_VECTOR_OFFSET * 2) {
-            vectorTemp[1] = progdata;
-        }
-
         // make sure we don't write over the bootloader!
         if (currentAddress >= BOOTLOADER_ADDRESS) {
             //__boot_page_fill_clear();
             return 1;
         }
 
-        writeWordToPageBuffer(address, progdata);
+        writeWordToPageBuffer(currentAddress, progdata);
     }
     if (currentCommand == MICRONUCLEUS_COMMAND_PAGEWRITE) {
-        currentAddress = address + SPM_PAGESIZE;
         fireEvent(EVENT_WRITE_PAGE);
     }
     if (currentCommand == MICRONUCLEUS_COMMAND_ERASE) {
-        currentAddress = address + SPM_PAGESIZE;
         fireEvent(EVENT_ERASE_APPLICATION);
     }
 
@@ -400,11 +387,8 @@ static inline void tiny85FlashInit(void) {
     if(pgm_read_word(RESET_VECTOR_OFFSET * 2) != 0xC000 + (BOOTLOADER_ADDRESS/2) - 1 ||
             pgm_read_word(USBPLUS_VECTOR_OFFSET * 2) != 0xC000 + (BOOTLOADER_ADDRESS/2) - 1) {
 
-        fillFlashWithVectors();
+        fillFirstPageWithVectors();
     }
-
-    // TODO: necessary to reset currentAddress?
-    currentAddress = 0;
 }
 
 static inline void tiny85FlashWrites(void) {
