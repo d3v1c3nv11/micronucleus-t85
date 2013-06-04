@@ -127,6 +127,7 @@ uchar usbHidPollFlag = 0;
 
 
 static uint16_t vectorTemp[2]; // remember data to create tinyVector table before BOOTLOADER_ADDRESS
+static addr_t currentAddress; // current progmem address, used for erasing and writing
 
 
 /* ------------------------------------------------------------------------ */
@@ -269,7 +270,6 @@ static void fillFirstPageWithVectors(void) {
 /* ------------------------------------------------------------------------ */
 
 uchar currentCommand;
-static addr_t currentAddress; // current progmem address, used for erasing and writing
 
 #define MICRONUCLEUS_COMMAND_GETINFO    0
 #define MICRONUCLEUS_COMMAND_PAGELOAD   1
@@ -297,25 +297,14 @@ static uchar usbFunctionSetup(uchar data[8]) {
             usbMsgPtr = replyBuffer;
             return sizeof(replyBuffer);
         } else if(rq->bRequest == USBRQ_HID_SET_REPORT) {
-            // react based on the command
-            if (currentCommand == MICRONUCLEUS_COMMAND_PAGELOAD ||
-                currentCommand == MICRONUCLEUS_COMMAND_PAGEWRITE ||
-                currentCommand == MICRONUCLEUS_COMMAND_ERASE) {
-                // depend on prior erase to set currentAddress to 0, and
-                //   currentAddress is incremented automatically during page loads
-                // or,
-                // TODO: add command to set currentAddress separate from page load
-                //currentAddress = rq->wIndex.word;
-
-                // pass off to usbFunctionWrite to receive the data
-                return USB_NO_MSG;
+            if(currentCommand == MICRONUCLEUS_COMMAND_STARTAPP) {
+#               if BOOTLOADER_CAN_EXIT
+                    fireEvent(EVENT_EXECUTE);
+#               endif
             }
 
-#           if BOOTLOADER_CAN_EXIT
-                fireEvent(EVENT_EXECUTE);
-#           endif
-
-            return 0;
+            /* assume all reports will be followed by data, hand off to usbFunctionWrite */
+            return USB_NO_MSG;
         }
     }
 
