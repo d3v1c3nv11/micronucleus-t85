@@ -171,6 +171,9 @@ static inline void eraseApplicationPage(void) {
     if (currentAddress) {
         currentAddress -= SPM_PAGESIZE;
 
+        if(!currentAddress)
+            eraseSafetyCheck();
+
         boot_page_erase(currentAddress);
         boot_spm_busy_wait();
     }
@@ -181,7 +184,6 @@ static inline void eraseApplicationPage(void) {
         // fillFlashWithVectors adds to currentAddress, so set it back to zero
         currentAddress = 0;
 
-        eraseSafetyCheck();
     }
     sei();
 }
