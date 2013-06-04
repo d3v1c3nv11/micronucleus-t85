@@ -323,7 +323,6 @@ static uchar usbFunctionWrite(uchar *data, uchar length) {
     // byte 2 is data0 for load
     // byte 3 is data1 for load
 
-    // if(data[0] == MICRONUCLEUS_COMMAND_PAGELOAD)
     currentAddress = *(unsigned short *)(data);
     unsigned short progdata = *(unsigned short *)(data + 2);
 
