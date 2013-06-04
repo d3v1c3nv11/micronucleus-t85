@@ -105,7 +105,7 @@ static uchar didWriteSomething = 0;
 
 uint16_t idlePolls = 0; // how long have we been idle?
 
-
+#if (USB_HID_SUPPORT == 1)
 /* USB report descriptor */
 PROGMEM char usbHidReportDescriptor[] = {
   0x06, 0xa0, 0xff, // USAGE_PAGE (Vendor Defined Page 1)
@@ -124,6 +124,7 @@ PROGMEM char usbHidReportDescriptor[] = {
 };
 
 uchar usbHidPollFlag = 0;
+#endif
 
 
 static uint16_t vectorTemp[2]; // remember data to create tinyVector table before BOOTLOADER_ADDRESS
@@ -255,7 +256,6 @@ static void fillFirstPageWithVectors(void) {
     //    writeWordToPageBuffer(0xFFFF); // is where vector tables are sorted out
     //}
 
-    currentAddress = 0x0000;
 
     // TODO: Or more simply:
     uchar i=0;
@@ -264,6 +264,7 @@ static void fillFirstPageWithVectors(void) {
         i+=2;
     } while (i < SPM_PAGESIZE);
 
+    currentAddress = 0x0000;
     writeFlashPage();
 }
 
@@ -428,8 +429,11 @@ static inline void leaveBootloader(void) {
 }
 
 int main(void) {
-DDRB|=(1<<0);
-DDRB|=(1<<1);
+#if USB_HID_SUPPORT
+    DDRB|=(1<<0);
+    DDRB|=(1<<1);
+#endif
+
     /* initialize  */
     #ifdef RESTORE_OSCCAL
         uint8_t osccal_default = OSCCAL;
@@ -441,7 +445,6 @@ DDRB|=(1<<1);
     wdt_disable();      /* main app may have enabled watchdog */
     tiny85FlashInit();
     bootLoaderInit();
-
 
     if (bootLoaderStartCondition()) {
         #if LOW_POWER_MODE
@@ -460,8 +463,10 @@ DDRB|=(1<<1);
 
             // only process commands that halt the CPU after a HID poll has been recently received
             // to minimize the chances of another poll coming while the CPU is halted
+#if (USB_HID_SUPPORT == 1)
             if (usbHidPollFlag) {
 PORTB|=(1<<1);
+#endif
 
                 // these next two freeze the chip for ~ 4.5ms, breaking usb protocol
                 // and usually both of these will activate in the same loop, so host
@@ -479,9 +484,11 @@ PORTB|=(1<<1);
 
                 clearEvents();
 
+#if (USB_HID_SUPPORT == 1)
                 usbHidPollFlag = 0;
 PORTB&=~(1<<1);
             }
+#endif
         } while(bootLoaderCondition());  /* main event loop runs so long as bootLoaderCondition remains truthy */
     }
 

@@ -15,6 +15,8 @@
 // uncomment this to enable the 'jumper from d5 to gnd to enable programming' mode
 //#define BUILD_JUMPER_MODE 1
 
+#define USB_HID_SUPPORT   1
+
 #ifndef BOOTLOADER_ADDRESS
 #define BOOTLOADER_ADDRESS 0
 #endif
@@ -66,7 +68,7 @@ these macros are defined, the boot loader uses them.
  * to interrupt pin INT0!
  */
 #endif
- 
+
 #if (defined __AVR_ATtiny85__) && (HARDWARE_CONFIG == TINY85_HARDWARE_CONFIG_1)
 # define USB_CFG_DMINUS_BIT      0
 /* This is the bit number in USB_CFG_IOPORT where the USB D- line is connected.
@@ -77,7 +79,7 @@ these macros are defined, the boot loader uses them.
  * This may be any bit in the port, but must be configured as a pin change interrupt.
  */
  #endif
- 
+
 #if (defined __AVR_ATtiny85__) && (HARDWARE_CONFIG == TINY85_HARDWARE_CONFIG_2)
 # define USB_CFG_DMINUS_BIT      3
 /* This is the bit number in USB_CFG_IOPORT where the USB D- line is connected.
@@ -222,7 +224,7 @@ these macros are defined, the boot loader uses them.
   #define digitalRead(pin) (PINB & _BV(pin))
   #define bootLoaderStartCondition() (!digitalRead(START_JUMPER_PIN))
   #define bootLoaderCondition() 1
-  
+
   #ifndef __ASSEMBLER__   /* assembler cannot parse function definitions */
     static inline void  bootLoaderInit(void) {
       // DeuxVis pin-5 pullup

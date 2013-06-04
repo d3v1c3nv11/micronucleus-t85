@@ -23,8 +23,11 @@
 #include "bootloaderconfig.h"
 
 /* --------------------------- Functional Range ---------------------------- */
-
-#define USB_CFG_HAVE_INTRIN_ENDPOINT    1
+#if (USB_HID_SUPPORT == 1)
+#   define USB_CFG_HAVE_INTRIN_ENDPOINT    1
+#else
+#   define USB_CFG_HAVE_INTRIN_ENDPOINT    0
+#endif
 /* Define this to 1 if you want to compile a version with two endpoints: The
  * default control endpoint 0 and an interrupt-in endpoint (any other endpoint
  * number).
@@ -51,7 +54,11 @@
  * it is required by the standard. We have made it a config option because it
  * bloats the code considerably.
  */
-#define USB_CFG_SUPPRESS_INTR_CODE      1
+#if (USB_HID_SUPPORT == 1)
+#   define USB_CFG_SUPPRESS_INTR_CODE      1
+#else
+#   define USB_CFG_SUPPRESS_INTR_CODE      0
+#endif
 /* Define this to 1 if you want to declare interrupt-in endpoints, but don't
  * want to send any data over them. If this macro is defined to 1, functions
  * usbSetInterrupt() and usbSetInterrupt3() are omitted. This is useful if
@@ -220,14 +227,22 @@
  * to fine tune control over USB descriptors such as the string descriptor
  * for the serial number.
  */
-#define USB_CFG_DEVICE_CLASS        0    /* set to 0 if deferred to interface */
+#if (USB_HID_SUPPORT == 1)
+#   define USB_CFG_DEVICE_CLASS        0    /* set to 0 if deferred to interface */
+#else
+#   define USB_CFG_DEVICE_CLASS        0xff    /* set to 0 if deferred to interface */
+#endif
 #define USB_CFG_DEVICE_SUBCLASS     0
 //#define USB_CFG_DEVICE_CLASS    0xFE /* application specific */
 //#define USB_CFG_DEVICE_SUBCLASS 0x01 /* device firmware upgrade */
 /* See USB specification if you want to conform to an existing device class.
  * Class 0xff is "vendor specific".
  */
-#define USB_CFG_INTERFACE_CLASS     3   /* define class here if not at device level */
+#if (USB_HID_SUPPORT == 1)
+#   define USB_CFG_INTERFACE_CLASS     3   /* define class here if not at device level */
+#else
+#   define USB_CFG_INTERFACE_CLASS     0   /* define class here if not at device level */
+#endif
 #define USB_CFG_INTERFACE_SUBCLASS  0
 #define USB_CFG_INTERFACE_PROTOCOL  0
 /* See USB specification if you want to conform to an existing device class or
@@ -235,7 +250,9 @@
  * HID class is 3, no subclass and protocol required (but may be useful!)
  * CDC class is 2, use subclass 2 and protocol 1 for ACM
  */
-#define USB_CFG_HID_REPORT_DESCRIPTOR_LENGTH    21
+#if (USB_HID_SUPPORT == 1)
+#   define USB_CFG_HID_REPORT_DESCRIPTOR_LENGTH    21
+#endif
 /* Define this to the length of the HID report descriptor, if you implement
  * an HID device. Otherwise don't define it or define it to 0.
  * If you use this define, you must add a PROGMEM character array named

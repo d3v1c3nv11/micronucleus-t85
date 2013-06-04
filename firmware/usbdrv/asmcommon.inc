@@ -151,10 +151,11 @@ handleIn:
     ldi     YH, hi8(usbTxBuf)   ;[44]
     rjmp    usbSendAndReti      ;[45] 57 + 12 = 59 until SOP
 
+#if USB_HID_SUPPORT
 setUsbPollFlag:
     sts     usbHidPollFlag, x1        ;[ ] x1 == USBPID_NAK from above
     rjmp    sendNakAndReti
-
+#endif
 
 ; Comment about when to set usbTxLen to USBPID_NAK:
 ; We should set it back when we receive the ACK from the host. This would

@@ -37,7 +37,9 @@ the file appropriate for the given clock rate.
     extern  usbRxBuf, usbDeviceAddr, usbNewDeviceAddr, usbInputBufOffset
     extern  usbCurrentTok, usbRxLen, usbRxToken, usbTxLen
     extern  usbTxBuf, usbTxStatus1, usbTxStatus3
+#   if USB_HID_SUPPORT
     extern  usbHidPollFlag
+#   endif
 #   if USB_COUNT_SOF
         extern usbSofCount
 #   endif
