@@ -149,6 +149,8 @@ static inline void eraseSafetyCheck(void) {
 
     for (tempaddr = SPM_PAGESIZE; tempaddr < BOOTLOADER_ADDRESS; tempaddr++) {
         if( pgm_read_byte(tempaddr) != 0xFF) {
+
+            // flash is not stable, restart system
             cli();
             wdt_enable(WDTO_15MS);
             while(1);
@@ -179,9 +181,7 @@ static inline void eraseApplicationPage(void) {
         // fillFlashWithVectors adds to currentAddress, so set it back to zero
         currentAddress = 0;
 
-        clearEvents();
-
-        //eraseSafetyCheck();
+        eraseSafetyCheck();
     }
     sei();
 }
@@ -300,7 +300,8 @@ static uchar usbFunctionSetup(uchar data[8]) {
         } else if(rq->bRequest == USBRQ_HID_SET_REPORT) {
             // react based on the command
             if (currentCommand == MICRONUCLEUS_COMMAND_PAGELOAD ||
-                currentCommand == MICRONUCLEUS_COMMAND_PAGEWRITE) {
+                currentCommand == MICRONUCLEUS_COMMAND_PAGEWRITE ||
+                currentCommand == MICRONUCLEUS_COMMAND_ERASE) {
                 // depend on prior erase to set currentAddress to 0, and
                 //   currentAddress is incremented automatically during page loads
                 // or,
@@ -309,11 +310,6 @@ static uchar usbFunctionSetup(uchar data[8]) {
 
                 // pass off to usbFunctionWrite to receive the data
                 return USB_NO_MSG;
-            }
-            if (currentCommand == MICRONUCLEUS_COMMAND_ERASE) {
-                fireEvent(EVENT_ERASE_APPLICATION);
-                currentAddress = BOOTLOADER_ADDRESS;
-                return 0;
             }
 
 #           if BOOTLOADER_CAN_EXIT
@@ -363,6 +359,11 @@ static uchar usbFunctionWrite(uchar *data, uchar length) {
         currentAddress = address + SPM_PAGESIZE;
         fireEvent(EVENT_WRITE_PAGE);
     }
+    if (currentCommand == MICRONUCLEUS_COMMAND_ERASE) {
+        currentAddress = address + SPM_PAGESIZE;
+        fireEvent(EVENT_ERASE_APPLICATION);
+    }
+
 
     return 1;
 }
@@ -492,7 +493,6 @@ PORTB|=(1<<1);
                 // needs to wait > 9ms before next usb request
                 if (isEvent(EVENT_ERASE_APPLICATION)) {
                     eraseApplicationPage();
-                    continue;
                 }
                 if (isEvent(EVENT_WRITE_PAGE)) tiny85FlashWrites();
 

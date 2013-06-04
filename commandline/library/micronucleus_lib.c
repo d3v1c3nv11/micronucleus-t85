@@ -84,23 +84,36 @@ micronucleus* micronucleus_connect() {
 
 int micronucleus_eraseFlash(micronucleus* deviceHandle, micronucleus_callback progress) {
   int res;
-  res = usb_control_msg(deviceHandle->device,
+
+  unsigned int address = deviceHandle->pages * deviceHandle->page_size;
+  unsigned char tempbuf[4] = {0, 0, 0, 0};
+
+  do {
+    address -= deviceHandle->page_size;
+
+    tempbuf[0] = address % 256;
+    tempbuf[1] = address / 256;
+
+    res = usb_control_msg(deviceHandle->device,
          USB_ENDPOINT_OUT | USB_TYPE_CLASS | USB_RECIP_DEVICE,
          USBRQ_HID_SET_REPORT,
          USB_HID_REPORT_TYPE_FEATURE << 8 | (MICRONUCLEUS_COMMAND_ERASE & 0xff),
          0,
-         0, 0,
+         tempbuf, sizeof(tempbuf),
          MICRONUCLEUS_USB_TIMEOUT);
 
-  // give microcontroller enough time to erase all writable pages and come back online
-  float i = 0;
-  while (i < 1.0) {
-    // update progress callback if one was supplied
-    if (progress) progress(i);
+    // give microcontroller enough time to write this page and come back online
+    delay(deviceHandle->write_sleep * 2);
 
-    delay(((float) deviceHandle->erase_sleep) / 100.0f);
-    i += 0.01;
-  }
+    if (res == sizeof(tempbuf))
+      res = 0;
+    else
+      return -1;
+
+    // TODO: update progress
+    if (progress) progress(0.5f);
+
+  } while (address);
 
   /* Under Linux, the erase process is often aborted with errors such as:
    usbfs: USBDEVFS_CONTROL failed cmd micronucleus rqt 192 rq 2 len 0 ret -84
