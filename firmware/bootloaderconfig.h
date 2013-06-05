@@ -190,6 +190,9 @@ these macros are defined, the boot loader uses them.
 #define TINYVECTOR_USBPLUS_OFFSET   2
 #define TINYVECTOR_OSCCAL_OFFSET    6
 
+#define TINYVECTOR_TABLE_SIZE       6
+#define PROGMEM_SIZE                (BOOTLOADER_ADDRESS - TINYVECTOR_TABLE_SIZE) /* max size of user program */
+
 #define RESET_VECTOR_OFFSET         0
 #define USBPLUS_VECTOR_OFFSET       2
 

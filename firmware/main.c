@@ -12,7 +12,8 @@
 #define MICRONUCLEUS_VERSION_MAJOR 1
 #define MICRONUCLEUS_VERSION_MINOR 6
 // how many milliseconds should host wait till it sends another erase or write?
-// needs to be above 4.5 (and a whole integer) as avr freezes for 4.5m
+// needs to be above 4.5 (and a whole integer) as avr freezes for 4.5m,
+// plus the poll interval, as the write doesn't start until there's an HID poll
 #define MICRONUCLEUS_WRITE_SLEEP (USB_CFG_INTR_POLL_INTERVAL + 5)
 
 
@@ -43,6 +44,8 @@ static void leaveBootloader() __attribute__((__noreturn__));
 #   define  BOOTLOADER_CAN_EXIT     0
 #endif
 
+#define addr_t uint
+
 /* allow compatibility with avrusbboot's bootloaderconfig.h: */
 #ifdef BOOTLOADER_INIT
 #   define bootLoaderInit()         BOOTLOADER_INIT
@@ -52,26 +55,7 @@ static void leaveBootloader() __attribute__((__noreturn__));
 #   define bootLoaderCondition()    BOOTLOADER_CONDITION
 #endif
 
-/* device compatibility: */
-#ifndef GICR    /* ATMega*8 don't have GICR, use MCUCR instead */
-#   define GICR     MCUCR
-#endif
-
 /* ------------------------------------------------------------------------ */
-
-#define addr_t uint
-
-// typedef union longConverter{
-//     addr_t  l;
-//     uint    w[sizeof(addr_t)/2];
-//     uchar   b[sizeof(addr_t)];
-// } longConverter_t;
-
-//////// Stuff Bluebie Added
-// postscript are the few bytes at the end of programmable memory which store tinyVectors
-// and used to in USBaspLoader-tiny85 store the checksum iirc
-#define POSTSCRIPT_SIZE 4
-#define PROGMEM_SIZE (BOOTLOADER_ADDRESS - POSTSCRIPT_SIZE) /* max size of user program */
 
 // verify the bootloader address aligns with page size
 #if BOOTLOADER_ADDRESS % SPM_PAGESIZE != 0
@@ -85,27 +69,24 @@ static void leaveBootloader() __attribute__((__noreturn__));
 #  endif
 #endif
 
+uchar eraseEvent, writeEvent, executeEvent;
+
 // events system schedules functions to run in the main loop
-static uchar events = 0; // bitmap of events to run
-#define EVENT_ERASE_APPLICATION 1
-#define EVENT_WRITE_PAGE 2
-#define EVENT_EXECUTE 4
+#define EVENT_ERASE_APPLICATION eraseEvent
+#define EVENT_WRITE_PAGE writeEvent
+#define EVENT_EXECUTE executeEvent
 
 // controls state of events
-#define fireEvent(event) events |= (event)
-#define isEvent(event)   (events & (event))
-#define clearEvents()    events = 0
-
-// length of bytes to write in to flash memory in upcomming usbFunctionWrite calls
-//static unsigned char writeLength;
-
-// becomes 1 when some programming happened
-// lets leaveBootloader know if needs to finish up the programming
-static uchar didWriteSomething = 0;
+#define fireEvent(event) event = 1
+#define isEvent(event)   (event & 1)
+// no need to clear executeEvent, as it exits the loop
+#define clearEvents()    {eraseEvent = writeEvent = 0;}
 
 uint16_t idlePolls = 0; // how long have we been idle?
 
 #if (USB_HID_SUPPORT == 1)
+uchar usbHidPollFlag = 0;
+
 /* USB report descriptor */
 PROGMEM char usbHidReportDescriptor[] = {
   0x06, 0xa0, 0xff, // USAGE_PAGE (Vendor Defined Page 1)
@@ -122,14 +103,11 @@ PROGMEM char usbHidReportDescriptor[] = {
 
   0xc0              // END_COLLECTION
 };
-
-uchar usbHidPollFlag = 0;
 #endif
-
 
 static uint16_t vectorTemp[2]; // remember data to create tinyVector table before BOOTLOADER_ADDRESS
 static addr_t currentAddress; // current progmem address, used for erasing and writing
-
+static uchar currentCommand; // current command received in a USB report
 
 /* ------------------------------------------------------------------------ */
 static inline void eraseApplicationPage(void);
@@ -149,33 +127,32 @@ static inline void eraseSafetyCheck(void) {
     addr_t tempaddr;
 
     for (tempaddr = SPM_PAGESIZE; tempaddr < BOOTLOADER_ADDRESS; tempaddr++) {
-        if( pgm_read_byte(tempaddr) != 0xFF) {
+        if (pgm_read_byte(tempaddr) != 0xFF) {
 
             // flash is not stable, restart system
-            cli();
             wdt_enable(WDTO_15MS);
             while(1);
         }
     }
 }
 
-// erase any existing application and write in jumps for usb interrupt and reset to bootloader
+// erase the page at currentAddress, and write in jumps for usb interrupt and reset to bootloader if the first page was erased
 //  - Because flash can be erased once and programmed several times, we can write the bootloader
 //  - vectors in now, and write in the application stuff around them later.
-//  - if vectors weren't written back in immidately, usb would fail.
+//  - if vectors weren't written back in immediately, usb would fail.
 static inline void eraseApplicationPage(void) {
-    // erase all pages until bootloader, in reverse order (so our vectors stay in place for as long as possible)
+    // special case when erasing the first page, check to make sure the rest of the application has been erased already
     // while the vectors don't matter for usb comms as interrupts are disabled during erase, it's important
     // to minimise the chance of leaving the device in a state where the bootloader wont run, if there's power failure
     // during upload
     cli();
-    if(!currentAddress)
+    if (!currentAddress)
         eraseSafetyCheck();
 
     boot_page_erase(currentAddress);
     boot_spm_busy_wait();
 
-    if(!currentAddress)
+    if (!currentAddress)
         fillFirstPageWithVectors();
 
     sei();
@@ -184,7 +161,6 @@ static inline void eraseApplicationPage(void) {
 // simply write currently stored page in to already erased flash memory
 static void writeFlashPage(void) {
     uint8_t previous_sreg = SREG; // backup current interrupt setting
-    didWriteSomething = 1;
     cli();
     boot_page_write(currentAddress);
     boot_spm_busy_wait(); // Wait until the memory is written.
@@ -212,8 +188,7 @@ static void writeWordToPageBuffer(addr_t address, uint16_t data) {
     if (address == (RESET_VECTOR_OFFSET * 2)) {
         vectorTemp[0] = data;
         data = 0xC000 + (BOOTLOADER_ADDRESS/2) - 1;
-    }
-    if (address == (USBPLUS_VECTOR_OFFSET * 2)) {
+    } else if (address == (USBPLUS_VECTOR_OFFSET * 2)) {
         vectorTemp[1] = data;
         data = 0xC000 + (BOOTLOADER_ADDRESS/2) - 1;
     }
@@ -239,38 +214,20 @@ static void writeWordToPageBuffer(addr_t address, uint16_t data) {
     cli(); // ensure interrupts are disabled
     boot_page_fill(address, data);
     SREG = previous_sreg; // restore previous interrupt setting
-
-    // only need to erase if there is data already in the page that doesn't match what we're programming
-    // TODO: what about this: if (pgm_read_word(currentAddress) & data != data) { ??? should work right?
-    //if (pgm_read_word(currentAddress) != data && pgm_read_word(currentAddress) != 0xFFFF) {
-    //if ((pgm_read_word(currentAddress) & data) != data) {
-    //    fireEvent(EVENT_PAGE_NEEDS_ERASE);
-    //}
 }
 
 static void fillFirstPageWithVectors(void) {
-    //int16_t i;
-    //
-    // fill all or remainder of page with 0xFFFF (as if unprogrammed)
-    //for (i = currentAddress % SPM_PAGESIZE; i < SPM_PAGESIZE; i += 2) {
-    //    writeWordToPageBuffer(0xFFFF); // is where vector tables are sorted out
-    //}
-
-
-    // TODO: Or more simply:
-    uchar i=0;
-    do {
-        writeWordToPageBuffer(i, 0xFFFF);
-        i+=2;
-    } while (i < SPM_PAGESIZE);
+    uchar i;
 
     currentAddress = 0x0000;
+    // fill page with nothing, let writeWordToPageBuffer fill in the vectors
+    for(i=0; i < SPM_PAGESIZE; i+=2)
+        writeWordToPageBuffer(i, 0xFFFF);
+
     writeFlashPage();
 }
 
 /* ------------------------------------------------------------------------ */
-
-uchar currentCommand;
 
 #define MICRONUCLEUS_COMMAND_GETINFO    0
 #define MICRONUCLEUS_COMMAND_PAGELOAD   1
@@ -291,14 +248,15 @@ static uchar usbFunctionSetup(uchar data[8]) {
 
     currentCommand = (uchar)rq->wValue.bytes[0];
 
-    if ((rq->bmRequestType & USBRQ_TYPE_MASK) == USBRQ_TYPE_CLASS) {    /* HID class request */
+    // assume everything coming in is a CLASS-type report (safe?)
+    //if ((rq->bmRequestType & USBRQ_TYPE_MASK) == USBRQ_TYPE_CLASS) {    /* HID class request */
         if (rq->bRequest == USBRQ_HID_GET_REPORT) {  /* wValue: ReportType (highbyte), ReportID (lowbyte) */
             /* since we have only one report type, we can ignore the report-ID */
             // get device info
             usbMsgPtr = replyBuffer;
             return sizeof(replyBuffer);
-        } else if(rq->bRequest == USBRQ_HID_SET_REPORT) {
-            if(currentCommand == MICRONUCLEUS_COMMAND_STARTAPP) {
+        } else if (rq->bRequest == USBRQ_HID_SET_REPORT) {
+            if (currentCommand == MICRONUCLEUS_COMMAND_STARTAPP) {
 #               if BOOTLOADER_CAN_EXIT
                     fireEvent(EVENT_EXECUTE);
 #               endif
@@ -307,17 +265,14 @@ static uchar usbFunctionSetup(uchar data[8]) {
             /* assume all reports will be followed by data, hand off to usbFunctionWrite */
             return USB_NO_MSG;
         }
-    }
+    //}
 
     return 0;
 }
 
 
-// read in a page over usb, and write it in to the flash write buffer
+// read in the common report structure, and process it based on the currentCommand
 static uchar usbFunctionWrite(uchar *data, uchar length) {
-    //if (length > writeLength) length = writeLength; // test for missing final page bug
-    //writeLength -= length;
-
     // byte 0 is address0
     // byte 1 is address1
     // byte 2 is data0 for load
@@ -329,19 +284,14 @@ static uchar usbFunctionWrite(uchar *data, uchar length) {
     if (currentCommand == MICRONUCLEUS_COMMAND_PAGELOAD) {
         // make sure we don't write over the bootloader!
         if (currentAddress >= BOOTLOADER_ADDRESS) {
-            //__boot_page_fill_clear();
             return 1;
         }
-
         writeWordToPageBuffer(currentAddress, progdata);
-    }
-    if (currentCommand == MICRONUCLEUS_COMMAND_PAGEWRITE) {
+    } else if (currentCommand == MICRONUCLEUS_COMMAND_PAGEWRITE) {
         fireEvent(EVENT_WRITE_PAGE);
-    }
-    if (currentCommand == MICRONUCLEUS_COMMAND_ERASE) {
+    } else if (currentCommand == MICRONUCLEUS_COMMAND_ERASE) {
         fireEvent(EVENT_ERASE_APPLICATION);
     }
-
 
     return 1;
 }
@@ -373,36 +323,23 @@ static inline void tiny85FlashInit(void) {
     // check for erased first page (no bootloader interrupt vectors), add vectors if missing
     // this needs to happen for usb communication to work later - essential to first run after bootloader
     // being installed
-    if(pgm_read_word(RESET_VECTOR_OFFSET * 2) != 0xC000 + (BOOTLOADER_ADDRESS/2) - 1 ||
+    if (pgm_read_word(RESET_VECTOR_OFFSET * 2) != 0xC000 + (BOOTLOADER_ADDRESS/2) - 1 ||
             pgm_read_word(USBPLUS_VECTOR_OFFSET * 2) != 0xC000 + (BOOTLOADER_ADDRESS/2) - 1) {
+
 
         fillFirstPageWithVectors();
     }
 }
 
 static inline void tiny85FlashWrites(void) {
-    _delay_us(2000); // TODO: why is this here? - it just adds pointless two level deep loops seems like?
     // write page to flash, interrupts will be disabled for > 4.5ms including erase
-
     writeFlashPage();
 }
-
-// finishes up writing to the flash, including adding the tinyVector tables at the end of memory
-// TODO: can this be simplified? EG: currentAddress = PROGMEM_SIZE; fillFlashWithVectors();
-// static inline void tiny85FinishWriting(void) {
-//     // make sure remainder of flash is erased and write checksum and application reset vectors
-//     if (didWriteSomething) {
-//         while (currentAddress < BOOTLOADER_ADDRESS) {
-//             fillFlashWithVectors();
-//         }
-//     }
-// }
 
 // reset system to a normal state and launch user program
 static inline void leaveBootloader(void) {
     _delay_ms(10); // removing delay causes USB errors
 
-    //DBG1(0x01, 0, 0);
     bootLoaderExit();
     cli();
     USB_INTR_ENABLE = 0;
@@ -470,9 +407,7 @@ PORTB|=(1<<1);
                 // these next two freeze the chip for ~ 4.5ms, breaking usb protocol
                 // and usually both of these will activate in the same loop, so host
                 // needs to wait > 9ms before next usb request
-                if (isEvent(EVENT_ERASE_APPLICATION)) {
-                    eraseApplicationPage();
-                }
+                if (isEvent(EVENT_ERASE_APPLICATION)) eraseApplicationPage();
                 if (isEvent(EVENT_WRITE_PAGE)) tiny85FlashWrites();
 
 #               if BOOTLOADER_CAN_EXIT
