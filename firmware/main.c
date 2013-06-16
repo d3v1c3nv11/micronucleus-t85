@@ -259,10 +259,11 @@ static uchar usbFunctionSetup(uchar data[8]) {
             if (currentCommand == MICRONUCLEUS_COMMAND_STARTAPP) {
 #               if BOOTLOADER_CAN_EXIT
                     fireEvent(EVENT_EXECUTE);
+                    return 0;
 #               endif
             }
 
-            /* assume all reports will be followed by data, hand off to usbFunctionWrite */
+            /* some reports will be followed by data, hand off to usbFunctionWrite */
             return USB_NO_MSG;
         }
     //}
