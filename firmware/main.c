@@ -399,6 +399,9 @@ static inline void leaveBootloader(void) {
 #define EXPECTED_TIMER0_OVERFLOWS   (EXPECTED_TIMER_TICKS / 256)
 #define TOLERATED_DEVIATION         (TOLERATED_DEVIATION_PPT * F_CPU / (1000000 * TIMER0_PRESCALING))
 
+// oscillatorTuned is set when the SOF is measured to be within the TOLERATED_DEVIATION
+uchar oscillatorTuned = 0;
+
 // using a combination of code from V-USB's osctune.h and the FunkUsb project
 static void tuneOscillator(void) {
     uchar tickOverflows = GPIOR1;
@@ -420,7 +423,8 @@ static void tuneOscillator(void) {
                 OSCCAL--;
          } else {
             if ((tickRemainder < EXPECTED_TIMER0_REMAINDER - TOLERATED_DEVIATION) && (osccal7bit < OSCCAL_MAX)) OSCCAL++;
-            if ((tickRemainder > EXPECTED_TIMER0_REMAINDER + TOLERATED_DEVIATION) && (osccal7bit > OSCCAL_MIN)) OSCCAL--;
+            else if ((tickRemainder > EXPECTED_TIMER0_REMAINDER + TOLERATED_DEVIATION) && (osccal7bit > OSCCAL_MIN)) OSCCAL--;
+            else oscillatorTuned = 1;
          }
 
 #ifdef OSCCAL_PWM_DEBUG
@@ -431,7 +435,6 @@ static void tuneOscillator(void) {
          GPIOR1 = 0;
     }
 }
-
 
 
 int main(void) {
@@ -459,23 +462,23 @@ int main(void) {
             CLKPR = 0;
         #endif
 
-            // set up Timer0 for oscillator calibration
-            // prescaler /8
-            TCCR0B = 2;
+        // set up Timer0 for oscillator calibration
+        // prescaler /8
+        TCCR0B = 2;
 #ifdef OSCCAL_PWM_DEBUG
-            // Fast PWM (to have timer freerunning, but allow for debugging through PWM signals)
-            // OC0B - Clear OC0B on Compare Match, set OC0B at BOTTOM
-            TCCR0A = (1 << COM0B1) | (1 << WGM01) | (1 << WGM00);
+        // Fast PWM (to have timer freerunning, but allow for debugging through PWM signals)
+        // OC0B - Clear OC0B on Compare Match, set OC0B at BOTTOM
+        TCCR0A = (1 << COM0B1) | (1 << WGM01) | (1 << WGM00);
 #endif
 
-            // set up USI as 4-bit counter - clocked by Timer0
-            USICR = (1 << USICS0);
-
+        // set up USI as 4-bit counter - clocked by Timer0
+        USICR = (1 << USICS0);
 
         initForUsbConnectivity();
         do {
             usbPoll();
-            tuneOscillator();
+            if(!oscillatorTuned)
+                tuneOscillator();
             _delay_us(100);
             idlePolls++;
 
