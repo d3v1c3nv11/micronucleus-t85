@@ -441,6 +441,10 @@ int main(void) {
 #ifdef OSCCAL_PWM_DEBUG
     DDRB |= (1 << PB0) | (1 << PB1) | (1 << PB2);
 #endif
+    // SPP + Tuxcon2017_Kitty pullup on PB.2
+    DDRB = DDRB | 0x04;
+    PORTB = PORTB | 0x04;
+    // SPP -
 
     /* initialize  */
     #ifdef RESTORE_OSCCAL
